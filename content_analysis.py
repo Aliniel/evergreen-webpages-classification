@@ -6,11 +6,15 @@ project in the Data Mining course at FIIT STU, 2017 by Branislav Makan.
 '''
 
 import re
-# import pandas
+import pandas
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem.lancaster import LancasterStemmer
-from sklearn.datasets import fetch_20newsgroups
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.pipeline import Pipeline
+import numpy as np
+from sklearn.linear_model import SGDClassifier
 
 
 def normalize(text_content):
@@ -57,44 +61,87 @@ def get_bag_of_words(text_content):
     return nltk.FreqDist(bag_of_words), lexical_diversity(bag_of_words)
 
 
-def categorize(train_df, test_df):
+def categorize(train_df):
     '''Get topic list for the text_content passed as argument. It's recommended
     to normalize the text before using this function.
         text_content - String of the text from which to extract topics.
     '''
-    categories = ['alt.atheism', 'soc.religion.christian',
-        'comp.graphics', 'sci.med']
-    twenty_train = fetch_20newsgroups(subset='train',
-        categories=categories, shuffle=True, random_state=42)
 
-    # del train_df['label']
-    # full_df = pandas.concat([train_df, test_df], ignore_index=True)
-    # # text_content = pandas.read_json(full_df['page_content'][60], typ='series')
+    # Parse text content from data frame into a raw text list
+    alchemy_labelled_df = train_df.loc[train_df['alchemy_category'] != '?']
+    labelled_text_content = []
+    for page_content in alchemy_labelled_df['page_content']:
+        json_content = pandas.read_json(page_content, typ='Series')
 
-    # all_words = set(
-    #     word
-    #     for text_content in full_df['page_content']
-    #     for word in get_bag_of_words(normalize(text_content))[0].keys()
-    #     )
-    # print(len(all_words))
+        if json_content.body is not None:
+            labelled_text_content.append(json_content.body)
+        else:
+            labelled_text_content.append(json_content.title)
 
-    # train_data = full_df.loc[full_df['alchemy_category'] != '?']
-    # train_data = train_data.reset_index(drop=True)
+        if labelled_text_content[-1] is None:
+            labelled_text_content[-1] = ''
 
-    # feature_list = []
-    # for i in range(len(train_data)):
-    #     page_content = train_data['page_content'][i]
-    #     category = train_data['alchemy_category'][i]
+    alchemy_unlabelled_df = train_df.loc[train_df['alchemy_category'] == '?']
+    unlabelled_text_content = []
+    for page_content in alchemy_unlabelled_df['page_content']:
+        json_content = pandas.read_json(page_content, typ='Series')
 
-    #     page_content = normalize(page_content)
-    #     bag_of_words = get_bag_of_words(page_content)[0].keys()
-    #     features = {}
-    #     for word in all_words:
-    #         features[word] = word in bag_of_words
-    #     feature_list.append((features, category))
+        if json_content.body is not None:
+            unlabelled_text_content.append(json_content.body)
+        else:
+            unlabelled_text_content.append(json_content.title)
 
-    # print(feature_list)
-    import pdb
-    pdb.set_trace()
+        if unlabelled_text_content[-1] is None:
+            unlabelled_text_content[-1] = ''
 
-    return train_df, test_df
+    # Build the classifier pipeline: build basg of words,
+    # then get frequencies and train Naive Bayes Model
+    # text_classifier = Pipeline([
+    #     ('vect', CountVectorizer()),
+    #     ('tfidf', TfidfTransformer()),
+    #     ('clf', MultinomialNB()),
+    # ])
+
+    # SVG Classifier
+    text_classifier = Pipeline([
+        ('vect', CountVectorizer(
+            ngram_range=(1, 2)
+        )),
+        ('tfidf', TfidfTransformer()),
+        ('clf', SGDClassifier(
+            loss='hinge',
+            penalty='l2',
+            alpha=1e-3,
+            n_iter=5,
+            random_state=42)),
+    ])
+
+    # --- This part was used to find the optimal parameters for the model ---
+
+    # parameters = {
+    #     'vect__ngram_range': [(1, 1), (1, 2)],
+    #     'tfidf__use_idf': (True, False),
+    #     'clf__alpha': (1e-2, 1e-3),
+    # }
+
+    # gs_clf = GridSearchCV(
+    #     text_classifier,
+    #     parameters,
+    #     n_jobs=-1
+    # )
+    # gs_clf = gs_clf.fit(
+    #     labelled_text_content[:-2000],
+    #     alchemy_labelled_df['alchemy_category'][:-2000]
+    # )
+    # for param_name in sorted(parameters.keys()):
+    #     print("%s: %r" % (param_name, gs_clf.best_params_[param_name]))
+
+    text_classifier = text_classifier.fit(
+        labelled_text_content,
+        alchemy_labelled_df['alchemy_category']
+    )
+
+    predicted = text_classifier.predict(unlabelled_text_content)
+    train_df.loc[train_df['alchemy_category'] == '?', ('alchemy_category')] = predicted
+
+    return train_df
